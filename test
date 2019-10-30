@@ -1,0 +1,11 @@
+#!/bin/sh
+
+find t/ -name "*$1*.t" | sort | while read t; do
+	echo "\e[1;34m--- $t ---\e[0m"
+	perl -wTI./lib $t
+	if [ $? -eq 0 ]; then
+		echo "\e[1;32mPASS\e[0m"
+	else
+		echo "\e[1;31mFAIL\e[0m"
+	fi
+done
