@@ -79,7 +79,11 @@ sub run {
 	
 	# TODO: сохраняем результат в transaction storage
 	foreach my $task (@$tasks) {
-		$task->{trx_storage}->set( $task->{record}, $task->{uniq_name}, $task->{uniq_key} );
+		if( $task->{record} ) {
+			$task->{trx_storage}->set_record( $task->{record} );
+		} else {
+			$task->{trx_storage}->set_empty( $task->{table}, $task->{uniq_name}, $task->{uniq_key} );
+		}
 	}
 	
 	return [ map {@$_} values %tables_uniqs2tasks ], scalar @$tasks;

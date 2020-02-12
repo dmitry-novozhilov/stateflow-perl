@@ -4,7 +4,9 @@ use strict;
 use warnings;
 use Data::Dumper;
 use Carp;
+use Const::Fast;
 use State::Flow::_TableInfo;
+use State::Flow::_Expression;
 
 sub _init_struct {
 	my($self, $declaration) = @_;
@@ -19,6 +21,7 @@ sub _init_struct {
 					$self->{tables}->{$tName}->{fields}->{$fName} = {
 						name	=> $fName,
 						default	=> 0,
+						expr	=> $fDecl->{expr} ? State::Flow::_Expression::parse($fDecl->{expr}) : undef,
 					};
 				}
 			}
@@ -29,16 +32,53 @@ sub _init_struct {
 					
 					# Выбираем в качестве primary key первый из самых коротких uniq'ов
 					# TODO: #types Когда у полей будут типы, нужно так же учитывать размер полей - лучше пусть primary будет из int'ов, чем из строк
-					if(! $self->{tables}->{$tName}->{primary} or @{ $self->{tables}->{$tName}->{uniqs}->{ $self->{tables}->{$tName}->{primary} } } > @$uniq ) {
+					if(	! $self->{tables}->{$tName}->{primary}
+						or @{ $self->{tables}->{$tName}->{uniqs}->{ $self->{tables}->{$tName}->{primary} } } > @$uniq
+					) {
 						$self->{tables}->{$tName}->{primary} = $uniq_name;
 					}
 				}
 				
 				
 			}
-			# TODO: elsif($tPropName eq 'indexes') {}
+			elsif($tPropName eq 'indexes') {
+				foreach my $index (@$tPropValue) {
+					my $undex_name = join('__', sort @$index);
+					$self->{tables}->{$tName}->{indexes}->{ join('__', sort @$index) } = $index;
+				}
+			}
 			else {
-				die "Unknown table property '$tName'";
+				die "Unknown table $tName property '$tPropName'";
+			}
+		}
+	}
+	
+	foreach my $tProps ( values %{ $self->{tables} } ) {
+		foreach $fProps ( values %{ $tProps->{fields} } ) {
+			if($fProps->{expr}) {
+				
+				# чекаем валидность ссылок (имена таблиц и полей)
+				
+				exists( $self->{tables}->{ $fProps->{expr}->{table} } )
+					or die "Unknown table '$fProps->{expr}->{table}' in $tProps->{name}.$fProps->{name} expression";
+				
+				exists( $self->{tables}->{ $fProps->{expr}->{table} }->{fields}->{ $fProps->{expr}->{match}->{ext_field} } )
+					or die "Unknown field '$fProps->{expr}->{table}.$fProps->{expr}->{match}->{ext_field}' in $tProps->{name}.$fProps->{name} expression";
+				
+				exists( $tProps->{fields}->{ $fProps->{expr}->{match}->{int_field} })
+					or die "Unknown field '$tProps->{name}.$fProps->{expr}->{match}->{int_field}' in $tProps->{name}.$fProps->{name} expression";
+				
+				exists( $self->{tables}->{ $fProps->{expr}->{table} }->{fields}->{ $fProps->{expr}->{field} } )
+					or die "Unknown field '$fProps->{expr}->{table}.$fProps->{expr}->{field}' in $tProps->{name}.$fProps->{name} expression";
+				
+				# создаём в таблице-приёмнике вирт.поле с материализацией ссылки
+				
+				$tProps->{fields}->{join('_', '', 'materialize',
+					$fProps->{expr}->{table},
+					$fProps->{expr}->{match}->{ext_field},
+					$fProps->{expr}->{match}->{int_field},
+					$fProps->{expr}->{field},
+				)} = {};
 			}
 		}
 	}
@@ -59,28 +99,28 @@ sub _upgrade_db {
 			
 			foreach my $old_field ( values %$old_fields ) {
 				if(! exists $table->{fields}->{ $old_field->{name} }) {
-					carp "Deleting field $old_field->{name} from $table->{name}";
+					$self->_warn( "Deleting field $old_field->{name} from $table->{name}" );
 					push @sq, "DROP COLUMN ".$self->{dbh}->quote_identifier($old_field->{name});
 				}
 			}
 			
 			foreach my $new_field (values %{ $table->{fields} } ) {
 				if(! exists $old_fields->{ $new_field->{name} } ) {
-					carp "Adding field $new_field->{name} to $table->{name}";
+					$self->_warn( "Adding field $new_field->{name} to $table->{name}" );
 					push @sq, "ADD COLUMN ".$self->{dbh}->quote_identifier($new_field->{name})." INT";
 				}
 			}
 			
 			while(my($old_uniq_name, $old_uniq) = each %$old_uniqs) {
 				if(! exists $table->{uniqs}->{ join('__', sort @$old_uniq) }) {
-					carp "Deleting unique index $old_uniq_name from $table->{name}";
+					$self->_warn( "Deleting unique index $old_uniq_name from $table->{name}" );
 					push @sq, "DROP INDEX ".$self->{dbh}->quote_identifier($old_uniq_name);
 				}
 			}
 			
 			while(my($new_uniq_name, $new_uniq) = each %{ $table->{uniqs} }) {
 				if(! grep {$new_uniq_name eq $_} map {join('__', sort @$_)} values %$old_uniqs) {
-					carp "Adding unique index $new_uniq_name to $table->{name}";
+					$self->_warn( "Adding unique index $new_uniq_name to $table->{name}" );
 					push @sq, "ADD UNIQUE INDEX ".$self->{dbh}->quote_identifier($new_uniq_name)." ("
 						.join(', ', sort @$new_uniq).")";
 				}
@@ -104,7 +144,7 @@ sub _upgrade_db {
 				push @sq, "	UNIQUE KEY ".$self->{dbh}->quote_identifier($uniq_name)." (".join(', ', map {$self->{dbh}->quote_identifier($_)} @{ $table->{uniqs}->{ $uniq_name } }).")";
 			}
 			
-			carp "Creating table $table->{name}";
+			$self->_warn( "Creating table $table->{name}" );
 			$self->{dbh}->do("CREATE TABLE ".$self->{dbh}->quote_identifier($table->{name})."(\n"
 				.join(",\n", @sq)."\n"
 				.")");
@@ -112,16 +152,43 @@ sub _upgrade_db {
 	}
 }
 
+use POSIX qw(strftime);
+sub _log {
+	my($self, $level, $text) = @_;
+	
+	return if $level < $self->{log_level};
+	
+	my $h = $self->{log_handler};
+	
+	print $h strftime("[%F %X]: ", localtime);
+	print $h $text;
+	print $h "\n" if substr($text, -1) ne "\n";
+}
+
+const my %LOG_LEVEL => ( INFO => 1, WARN => 2, ERROR => 3 );
+
+sub _info	{ shift->_log( $LOG_LEVEL{INFO}, @_ ) }
+sub _warn	{ shift->_log( $LOG_LEVEL{WARN}, @_ ) }
+sub _error	{ shift->_log( $LOG_LEVEL{ERROR}, @_ ) }
+
 sub new {
-	my($class, $declaration, $dbh) = @_;
+	my($class, $declaration, $dbh, %options) = @_;
+	
+	$options{log_level} = $LOG_LEVEL{$options{log_level} || 'WARN'};
 	
 	my $self = bless {
-		dbh	=> $dbh,
+		dbh			=> $dbh,
+		log_handler	=> \*STDERR,
+		%options,
 	} => $class;
 	$self->_init_struct($declaration);
 	$self->_upgrade_db();
 	
 	return $self;
+}
+
+sub option {
+	die "Unimplemented"; # TODO:
 }
 
 sub _selector_2_uniq_name_key {
@@ -317,7 +384,7 @@ sub fetch {
 	
 	# TODO: commit
 	
-	return $task->result->current_version;
+	return $task->result ? $task->result->current_version : undef;
 }
 
 1;

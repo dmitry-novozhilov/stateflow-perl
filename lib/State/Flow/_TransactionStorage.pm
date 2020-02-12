@@ -86,26 +86,32 @@ sub on_record_update {
 	$self->{records}->{ refaddr($record) } = $record;
 }
 
-=pod Запись в транзакционный кеш
+=pod Запись в транзакционный кеш объекта записи таблицы.
 Параметры:
-	 0		- StateFlow::Record (если запись в БД не была найдена, Record должен быть удалённой записи (->current_version возвращает undef);
-	[1,2]	- если запись в БД не была найдена, имя и ключ uniq'а, по которым она искалась;
-Результат: нет
+	0		- объект State::Flow::_Record
 =cut
-sub set {
+sub set_record {
 	my($self, $record, $uniq_name, $uniq_key) = @_;
 	
-	if($record and $record->current_version) {
-		my $uniq_fields;
-		while(($uniq_name, $uniq_fields) = each %{ $self->{state_flow}->{tables}->{ $record->table }->{uniqs} }) {
-			$uniq_key = join('|', map { $record->current_version->{ $_ } } sort @$uniq_fields);
-			$self->{data}->{ $record->table }->{ $uniq_name }->{ $uniq_key } = $record;
-		}
-	} else {
+	my $uniq_fields;
+	while(($uniq_name, $uniq_fields) = each %{ $self->{state_flow}->{tables}->{ $record->table }->{uniqs} }) {
+		$uniq_key = join('|', map { $record->current_version->{ $_ } } sort @$uniq_fields);
 		$self->{data}->{ $record->table }->{ $uniq_name }->{ $uniq_key } = $record;
 	}
 	
 	$self->{records}->{ refaddr($record) } = $record;
+}
+
+=pod Запись в транзакционный кеш факта, что по указанному значению указанного ключа ничего не найдено, и это пустое место закреплено за данной транзакцией.
+Параметры:
+	 0	- таблица, в которой искали;
+	 1	- название ключа, по которому искали;
+	 2	- ключ ключа, который искали.
+=cut
+sub set_empty {
+	my($self, $table, $uniq_name, $uniq_key) = @_;
+	
+	$self->{data}->{ $table }->{ $uniq_name }->{ $uniq_key } = undef;
 }
 
 1;
