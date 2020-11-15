@@ -1,0 +1,36 @@
+
+
+table
+	name
+	fields
+		name
+		restrictions: datatype, vals,..
+		fieldtype:
+			user data
+			expression
+				used fields
+			link (materializable)
+				ext_table
+				ext_field
+				match conds
+					ext_field
+					op
+					int_field
+	selections
+		fields to select
+		match conds
+			field
+			op
+			value
+		order fields
+
+computed table
+	agregat
+		source table
+		filter conds
+		fields (can use expressions with agregat functions)
+		group fields
+	union
+		source tables
+		fields
+	join ...
