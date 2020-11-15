@@ -6,7 +6,7 @@ This is a library for manipulation data in a DB, in which all data structures an
 
 At the same time, it takes into account the statistics of the use of this data and, on its basis, can optimize the actual data flow, choosing the degree of aggressiveness of materialization of secondary data structures.
 
-## Exsample
+## Example
 
 We have `comments` table with next user fields:
 
