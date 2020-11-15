@@ -2,6 +2,7 @@ package State::Flow;
 
 use strict;
 use warnings;
+our $VERSION = '0.0.1';
 use Data::Dumper;
 use Carp;
 use Const::Fast;
@@ -13,7 +14,7 @@ sub _init_struct {
 	
 	while(my($tName, $tDecl) = each %$declaration) {
 		
-		$self->{tables}->{$tName} = {name => $tName};
+		$self->{tables}->{$tName} = {name => $tName, triggers => {}};
 		
 		while(my($tPropName, $tPropValue) = each %$tDecl) {
 			if($tPropName eq 'fields') {
@@ -54,31 +55,71 @@ sub _init_struct {
 	}
 	
 	foreach my $tProps ( values %{ $self->{tables} } ) {
-		foreach $fProps ( values %{ $tProps->{fields} } ) {
+		foreach my $fProps ( values %{ $tProps->{fields} } ) {
 			if($fProps->{expr}) {
 				
-				# чекаем валидность ссылок (имена таблиц и полей)
-				
-				exists( $self->{tables}->{ $fProps->{expr}->{table} } )
+				my $ext_table = $self->{tables}->{ $fProps->{expr}->{table} }
+					# чекаем валидность ссылок (имена таблиц и полей)
 					or die "Unknown table '$fProps->{expr}->{table}' in $tProps->{name}.$fProps->{name} expression";
 				
-				exists( $self->{tables}->{ $fProps->{expr}->{table} }->{fields}->{ $fProps->{expr}->{match}->{ext_field} } )
+				
+				warn Dumper([$ext_table, $fProps, $tProps]);
+				exists( $ext_table->{fields}->{ $fProps->{expr}->{match}->{ext_field} } )
 					or die "Unknown field '$fProps->{expr}->{table}.$fProps->{expr}->{match}->{ext_field}' in $tProps->{name}.$fProps->{name} expression";
 				
 				exists( $tProps->{fields}->{ $fProps->{expr}->{match}->{int_field} })
 					or die "Unknown field '$tProps->{name}.$fProps->{expr}->{match}->{int_field}' in $tProps->{name}.$fProps->{name} expression";
 				
-				exists( $self->{tables}->{ $fProps->{expr}->{table} }->{fields}->{ $fProps->{expr}->{field} } )
+				exists( $ext_table->{fields}->{ $fProps->{expr}->{field} } )
 					or die "Unknown field '$fProps->{expr}->{table}.$fProps->{expr}->{field}' in $tProps->{name}.$fProps->{name} expression";
 				
-				# создаём в таблице-приёмнике вирт.поле с материализацией ссылки
+				my $materialize_field = join(_ => '', stateflow => materialize
+					# TODO: #multi_record_selector
+					=> $ext_table->{name} => $fProps->{expr}->{match}->{ext_field} => eq => $fProps->{expr}->{match}->{int_field}
+					=> $fProps->{expr}->{field});
 				
-				$tProps->{fields}->{join('_', '', 'materialize',
-					$fProps->{expr}->{table},
-					$fProps->{expr}->{match}->{ext_field},
-					$fProps->{expr}->{match}->{int_field},
-					$fProps->{expr}->{field},
-				)} = {};
+				# TODO: calc-задание на это expr-поле:
+					# если все необходимые материализации есть, просто считает выражение
+					# если каких-то не хватает, сначала требует calc-задание на них
+				
+				$tProps->{fields}->{ $materialize_field } = {
+					name			=> $materialize_field,
+					default			=> 0,
+					m13n			=> { # TODO: Это для выполнения calc-задания на этом поле. Быть может стоит обозвать этот тип задания иначе
+						table	=> $ext_table->{name},
+						selector=> [ $fProps->{expr}->{match}->{ext_field} => '=' => $fProps->{expr}->{match}->{int_field} ],
+						field	=> $fProps->{expr}->{field},
+					},
+					update_triggers	=> [
+						{
+							type	=> 'UpdateExpr',
+							field	=> $fProps->{name},
+						}
+					],
+				};
+				
+				# Внешние триггеры (на поле из match_conds и на целевое поле ссылки):
+				# триггер обновит материализацию поля той таблцы в этой таблице
+				# и потом триггер уже на этой таблице, на поле материализации, пересчитает поле с выражением, использующим эту материализацию
+				my $ext_table_trigger = {
+					type	=> 'UpdatePlain',
+					table	=> $tProps->{name},
+					selector=> [ $fProps->{expr}->{match}->{int_field}, '=', $fProps->{expr}->{match}->{ext_field} ],
+					# TODO: при выполнении триггера надо подставить значение поля
+					changes	=> { $materialize_field => $fProps->{expr}->{field} },
+				};
+				push @{ $ext_table->{fields}->{ $fProps->{expr}->{field} }->{update_triggers} }, $ext_table_trigger;
+				if( $fProps->{expr}->{field} ne $fProps->{expr}->{match}->{ext_field} ) {
+					push @{ $ext_table->{fields}->{ $fProps->{expr}->{match}->{ext_field} }->{update_triggers} }, $ext_table_trigger;
+				}
+				
+				push @{ $tProps->{fields}->{ $fProps->{expr}->{match}->{int_field} }->{triggers} }, {
+					type	=> 'Calc',
+					field	=> $materialize_field,
+				};
+				
+				# TODO: дамп текущего состояния наборов заданий и кеша. При любой ошибке печатать первый дамп и хоть общие черты второго.
+				
 			}
 		}
 	}
@@ -242,9 +283,10 @@ sub _run {
 }
 
 
-use State::Flow::_UpdateTask;
-use State::Flow::_FetchTask;
-use State::Flow::_CalcTask;
+use State::Flow::_Task::Fetch;
+use State::Flow::_Task::UpdatePlain;
+use State::Flow::_Task::UpdateExpr;
+use State::Flow::_Task::UpdateM13n;
 use State::Flow::_TransactionStorage;
 
 sub update {
@@ -254,7 +296,7 @@ sub update {
 	
 	my $trxStorage = State::Flow::_TransactionStorage->new($self);
 	
-	my $task = State::Flow::_UpdateTask->new(
+	my $task = State::Flow::_Task::UpdatePlain->new(
 		state_flow	=> $self,
 		trx_storage	=> $trxStorage,
 		table		=> $table,
@@ -373,7 +415,7 @@ sub fetch {
 	
 	my $trxStorage = State::Flow::_TransactionStorage->new($self);
 	
-	my $task = State::Flow::_FetchTask->new(
+	my $task = State::Flow::_Task::Fetch->new(
 		state_flow	=> $self,
 	 	trx_storage	=> $trxStorage,
 	 	table		=> $table,

@@ -3,7 +3,7 @@ package State::Flow::_TransactionStorage;
 use strict;
 use warnings;
 use Data::Dumper;
-use List::MoreUtils qw(uniq);
+#use List::MoreUtils qw(uniq);
 use Scalar::Util qw(refaddr);
 use Carp;
 

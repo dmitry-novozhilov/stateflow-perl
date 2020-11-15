@@ -1,4 +1,4 @@
-package State::Flow::_FetchTask;
+package State::Flow::_Task::Fetch;
 
 use strict;
 use warnings;
