@@ -1,25 +1,31 @@
 package State::Flow;
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
+use Const::Fast;
 
 sub _TableInfo {
-	my($dbh, $table_name) = @_;
+	my($class, $fields, $uniqs, $non_uniqs) = @_;
 	
-	my %fields = map { $_->{Field} => {name => $_->{Field}, default => $_->{Default} } }
-		map {@$_}
-		$dbh->selectall_arrayref("SHOW COLUMNS FROM ".$dbh->quote_identifier($table_name), {Slice=>{}})
-		;
-	
-	my %uniqs;
-	foreach my $if (map {@$_}
-		$dbh->selectall_arrayref("SHOW INDEX FROM ".$dbh->quote_identifier($table_name), {Slice=>{}})
-	) {
-		next if $if->{Non_unique};
-		$uniqs{ $if->{Key_name} }->[ $if->{Seq_in_index} - 1 ] = $if->{Column_name};
+	my %indexes;
+	foreach my $uniq ($uniqs->@*) {
+		$indexes{ join(':', sort $uniq->@*) } = 1;
 	}
 	
-	return \%fields, \%uniqs;
+	# TODO: $non_uniqs + учесть, что любое начало uniq'а - это non_uniq
+	
+	my %defaults;
+	while(my($field, $field_info) = each %$fields) {
+		$defaults{ $field } = $field_info->{default};
+	}
+	
+	const my $info => {
+		fields	=> $fields,
+		defaults=> \%defaults,
+		indexes	=> \%indexes,
+	};
+	
+	return $info;
 }
 
 1;

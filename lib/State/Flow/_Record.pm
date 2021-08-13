@@ -1,73 +1,54 @@
 package State::Flow::_Record;
 
 use strict;
-use warnings;
-use Data::Dumper;
+use warnings FATAL => 'all';
+use Carp;
 
 sub new {
-	my($class, %options) = @_;
-	return bless {
-		state_flow	=> $options{state_flow},
-		trx_storage	=> $options{trx_storage},
-		table		=> $options{table},
-		versions	=> [ $options{value} ],
-	} => $class;
+    my($class, $table, @versions) = @_;
+
+    croak "You creating useless record" if ! $versions[-1];
+
+    Internals::SvREADONLY(@versions, 1);
+
+    return bless {
+        table       => $table,
+        versions    => \@versions,
+    } => $class;
 }
 
 sub table {shift->{table}}
 
-=pod Возвращает копию значений текущей версии
-=cut
-sub current_version {
-	if( my $cv = shift->{versions}->[-1] ) {
-		return { %$cv };
-	} else {
-		return undef;
-	}
-}
+# Returns current version values (readonly!)
+sub current_version { shift->{versions}->[-1] }
 
-=pod Возвращает копию значений первой (инициирующей) версии
-=cut
-sub initial_version {
-	if( my $cv = shift->{versions}->[0] ) {
-		return { %$cv };
-	} else {
-		return undef;
-	}
-}
+# Returns initial version values (readonly!)
+sub initial_version { shift->{versions}->[0] }
 
-=pod Обновление записи.
-Добавляет в список версий записи новую версию, которая отличается от предыдущей переданными изменениями.
-Параметры:
-	 0	- если запись создаётся или обновляется, то ссылка на хеш изменений, где:
-	 		ключ	- название поля;
-			значение- новое значение
-		Если же запись удаляется, то undef,
-Результат:
-	 0	- состояние "до";
-	 1	- состояние "после".
-=cut
-sub update {
-	my($self, $changes) = @_;
-	
-	if( $changes ) {
-		if( $self->{versions}->[-1] ) {
-			push @{ $self->{versions} }, { %{ $self->{versions}->[-1] }, %$changes };
-		} else {
-			push @{ $self->{versions} }, {
-				map { $_->{name} => exists $changes->{ $_->{name} } ? $changes->{ $_->{name} } : $_->{default} }
-				values %{ $self->{state_flow}->{tables}->{ $self->{table} }->{fields} }
-			};
-		}
-	} else {
-		push @{ $self->{versions} }, undef;
-	}
-	
-	# при изменении ключевых полей записи обновим индексы в памяти (локальный кеш)
-	$self->{trx_storage}->on_record_update($self, $self->{versions}->[-2], $self->{versions}->[-1]);
-	
-	# возвращаем before, after
-	return $self->{versions}->[-2], $self->{versions}->[-1];
+# Record updating. Call from State::Flow::_Transaction only allowed.
+# Params:
+#   0   - if it is creating of new record or updating of existing record: hashref of changes
+#       - if it is deleting of record: undef
+# Result:
+#   0   - state before changes
+#   1   - state after changes
+sub _update {
+    my($self, $changes) = @_;
+
+    Internals::SvREADONLY($self->{versions}->@*, 0);
+
+    if($changes) {
+        use Data::Dumper;
+        die "Can't update non-existent record ".Dumper($self) if ! $self->{versions}->[-1];
+        push $self->{versions}->@*, { $self->{versions}->[-1]->%*, $changes->%* };
+    } else {
+        push @{ $self->{versions} }, undef;
+    }
+    Internals::SvREADONLY($self->{versions}->[-1], 1);
+
+    Internals::SvREADONLY($self->{versions}->@*, 1);
+
+    return $self->{versions}->[-2], $self->{versions}->[-1];
 }
 
 1;

@@ -1,4 +1,29 @@
+1. Declaration initializer
+    User declaration -> Usable meta information structure
+7. + Record
+2. Transaction storage
+3. Tasks loop
+    while(@tasks) {
+        select task via plugin
+        run task & get from it next tasks
+    }
+    return result of first task
+4. Task base class ->run:
+    return self & fetch task if no record in trx storage
+5. Fetch task ->run:
+    base run
+    return record from trx storage
+6. Update task ->run:
+    record ->update
+    create calc task for each depend field in record who affected this update
+    create m13n task for each link from any table to affected field or using affected field in matches
+7. Materialization (m13n) task ->run:
+    return self & fetch task if no linker record in trx storage
+    get value from linked record and gen update task about set this value on self record
 
+Match ([a=b,c=d])
+	Все поля отсортированы на этапе декларации структуры или получения запроса снаружи
+	Хеш, т.к. поля уникальны
 
 table
 	name
