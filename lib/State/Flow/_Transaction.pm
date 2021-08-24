@@ -5,6 +5,7 @@ use warnings FATAL => 'all';
 use Scalar::Util qw(refaddr);
 #use Data::Structure::Util qw(unbless); # TODO: require libdata-structure-util-perl
 use Carp;
+use Data::Dmp;
 use State::Flow::_Record;
 use State::Flow::_DB;
 
@@ -34,50 +35,62 @@ sub new {
 sub _upd_record_in_cache {
     my($self, $record, $before, $after) = @_;
 
-    die "Can't update this record because it's transaction is out" if ! $self->{in_trx};
+    confess "Can't update this record because it's transaction is out" if ! $self->{in_trx};
 
     while(my($index_name, $index_info) = each $self->{struct}->{ $record->table }->{indexes}->%*) {
         next unless $index_info->{is_unique};
+
+        my $index_int_name = $self->values_to_index_name($index_info->{fields});
 
         if( $before     # if something was before
             and (       # and
                 ! $after# it has gone
                 # or it changed in key fields
-                or grep {defined($before->{ $_ }) != defined($after->{ $_ }) or $before->{ $_ } ne $after->{ $_ }}
+                or grep {
+                    defined($before->{ $_ }) != defined($after->{ $_ })
+                    or (defined($before->{ $_ }) and $before->{ $_ } ne $after->{ $_ })
+                }
                 $index_info->{fields}->@*
             )
         ) { # then now here is undef
 
             my $index_key = $self->values_to_index_key({ $before->%{ $index_info->{fields}->@* } });
 
-            $self->{storage}->{ $record->table }->{ $index_name }->{ $index_key } = undef;
+            $self->{storage}->{ $record->table }->{ $index_int_name }->{ $index_key } = undef;
         }
 
         if(    $after    # if something exists after
             and (        # and
             ! $before    # it didn't exists before
                 # or it changed in key fields
-                or grep {defined($before->{ $_ }) != defined($after->{ $_ }) or $before->{ $_ } ne $after->{ $_ }}
+                or grep {
+                    defined($before->{ $_ }) != defined($after->{ $_ })
+                    or (defined($before->{ $_ }) and $before->{ $_ } ne $after->{ $_ })
+                }
                 $index_info->{fields}->@*
         )
         ) {                    # then now here is record
             my $index_key = $self->values_to_index_key({ $after->%{ $index_info->{fields}->@* } });
 
-            die "DUP" if $self->{storage}->{ $record->table }->{ $index_name }->{ $index_key };
+            die "DUP" if $self->{storage}->{ $record->table }->{ $index_int_name }->{ $index_key };
 
-            $self->{storage}->{ $record->table }->{ $index_name }->{ $index_key } = $record;
+            $self->{storage}->{ $record->table }->{ $index_int_name }->{ $index_key } = $record;
         }
     }
 }
 
 sub values_to_index_name {
     my(undef, $values) = @_;
-    return join(':', sort keys %$values);
+    return join(':', sort keys %$values) if ref($values) eq 'HASH';
+    return join(':', sort @$values) if ref($values) eq 'ARRAY';
+    die;
 }
 
 sub values_to_index_key {
     my(undef, $values) = @_;
-    return join(':', map {$values->{ $_ }} sort keys %$values);
+    croak "undefined value key" if grep {not defined} keys %$values;
+    croak "no values" if ! %$values;
+    return join(':', map {$values->{ $_ } // '<NULL>'} sort keys %$values);
 }
 
 # TODO: bulk
@@ -121,7 +134,7 @@ sub fetch {
         my $index_key = $self->values_to_index_key($mconds);
         $self->{storage}->{ $table }->{ $index_name }->{ $index_key } ||= undef;
     }
-    
+
     unless($self->{in_trx}) {
         $self->{db}->trx_begin();
         $self->{in_trx} = 1;
@@ -131,7 +144,6 @@ sub fetch {
 
     foreach my $row (@$rows) {
         my $record = State::Flow::_Record->new($table, $row);
-
         $self->_upd_record_in_cache($record, undef, $record->current_version);
         $self->{records}->{ refaddr($record) } = $record;
     }
@@ -143,9 +155,9 @@ sub fetch {
 sub create_record {
     my($self, $table) = @_;
 
-    say STDERR "trx->create_record($table)";
-    use Data::Dumper;
-    say STDERR "trx->struct=".Dumper($self->{struct});
+    #say STDERR "trx->create_record($table)";
+    #use Data::Dumper;
+    #say STDERR "trx->struct=".Dumper($self->{struct}).__FILE__.':'.__LINE__;
 
     my $record = State::Flow::_Record->new($table => undef, $self->{struct}->{ $table }->{defaults});
 
@@ -165,47 +177,60 @@ sub create_record {
 sub update_record {
     my($self, $record, $changes) = @_;
 
+    unless($self->{in_trx}) {
+        $self->{db}->trx_begin();
+        $self->{in_trx} = 1;
+    }
+
     die "Unknown record. You must use record got from ->get method of this object".Dumper($self) if ! $self->{records}->{ refaddr($record) };
 
-    my($before, $after) = $record->_update($changes);
+    my($before, $after) = $record->update($changes);
 
     $self->_upd_record_in_cache($record, $before, $after);
 
     return $before, $after;
 }
 
-sub _write_records_changes {
+sub save_records {
     my($self) = @_;
 
-    my(%table2insertions, %table2deletions, %table2updates_vals, %table2updates_match_conds);
-    while(my(undef, $record) = each $self->{records}->%*) {
-        my $initial_version = $record->initial_version;
+    my(%table2insertions, %table2deletions, %table2updates_vals, %table2updates_match_conds, @new_tasks);
+    foreach my $record (values $self->{records}->%*) {
+        my $last_saved_version = $record->last_saved_version;
         my $current_version = $record->current_version;
 
-        next if ! $initial_version and ! $current_version;
+        next if not $last_saved_version and not $current_version;
 
-        if($initial_version and ! $current_version) {
+        if($last_saved_version and not $current_version) {
             push $table2deletions{ $record->table }->@*, {
-                $initial_version->%{ $self->{struct}->{ $record->table }->{indexes}->{PRIMARY}->{fields}->@* }
+                $last_saved_version->%{ $self->{struct}->{ $record->table }->{indexes}->{PRIMARY}->{fields}->@* }
             };
         }
-        elsif(! $initial_version and $current_version) {
-            push $table2insertions{ $record->table }->@*, [
+        elsif(! $last_saved_version and $current_version) {
+            push $table2insertions{ $record->table }->{insertions}->@*, [
                 $current_version->@{ $self->{struct}->{ $record->table }->{fields_order}->@* }
             ];
+            my $autoincrement_field = $self->{struct}->{ $record->table }->{autoincrement_field};
+            if($autoincrement_field and not defined $current_version->{ $autoincrement_field }) {
+                push $table2insertions{ $record->table }->{records_to_upd_autoincrement}->@*, $record;
+            }
         }
         else {
-            push $table2updates_match_conds{ $record->table }->@*, {
-                $initial_version->%{ $self->{struct}->{ $record->table }->{indexes}->{PRIMARY}->{fields}->@* }
-            };
-
-            push $table2updates_vals{ $record->table }->@*, {
+            my %changes = (
                 map {$_ => $current_version->{ $_ }}
                 grep {
-                    defined($current_version->{ $_ }) != defined($initial_version->{ $_ })
-                    or (defined($current_version->{ $_ }) and $current_version->{ $_ } ne $initial_version->{ $_ })
+                    defined($current_version->{ $_ }) != defined($last_saved_version->{ $_ })
+                    or (defined($current_version->{ $_ }) and $current_version->{ $_ } ne $last_saved_version->{ $_ })
                 } keys %$current_version
-            };
+            );
+
+            if(%changes) {
+                push $table2updates_match_conds{ $record->table }->@*, {
+                    $last_saved_version->%{ $self->{struct}->{ $record->table }->{indexes}->{PRIMARY}->{fields}->@* }
+                };
+
+                push $table2updates_vals{ $record->table }->@*, \%changes;
+            }
         }
     }
 
@@ -214,12 +239,29 @@ sub _write_records_changes {
     }
 
     while(my($table, $insertions) = each %table2insertions) {
-        $self->{db}->insert_rows($table, $self->{struct}->{ $table }->{fields_order}, $insertions);
+        my $ids = $self->{db}->insert_rows(
+            $table,
+            $self->{struct}->{ $table }->{fields_order},
+            $insertions->@{qw/insertions records_to_upd_autoincrement/},
+        );
+
+        if($insertions->{records_to_upd_autoincrement}) {
+            foreach my $record ($insertions->{records_to_upd_autoincrement}->@*) {
+                my $autoincrement_field = $self->{struct}->{ $record->table }->{autoincrement_field};
+                my($before, $after) = $record->update({$autoincrement_field => shift @$ids});
+                push @new_tasks, State::Flow::_Task::Write->proc_record_change($before, $after)->@*;
+            }
+        }
     }
 
     while(my($table, $updates) = each %table2updates_vals) {
         $self->{db}->update_rows($table, $updates, $table2updates_match_conds{ $table });
     }
+
+    # set last saved version to last version
+    $_->on_save() foreach values $self->{records}->%*;
+
+    return \@new_tasks;
 }
 
 sub commit {
@@ -228,7 +270,7 @@ sub commit {
     die "Attempt to commit out of transaction" if ! $self->{in_trx};
 
     # dump all changes to DB
-    $self->_write_records_changes();
+    $self->save_records();
 
 
     $self->{db}->trx_commit();

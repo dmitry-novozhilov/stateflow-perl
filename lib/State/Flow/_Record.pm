@@ -12,8 +12,9 @@ sub new {
     Internals::SvREADONLY(@versions, 1);
 
     return bless {
-        table       => $table,
-        versions    => \@versions,
+        table              => $table,
+        versions           => \@versions,
+        last_saved_version => 0,
     } => $class;
 }
 
@@ -22,8 +23,17 @@ sub table {shift->{table}}
 # Returns current version values (readonly!)
 sub current_version { shift->{versions}->[-1] }
 
-# Returns initial version values (readonly!)
-sub initial_version { shift->{versions}->[0] }
+# Returns last saved to database version values (readonly!)
+sub last_saved_version {
+    my $self = shift;
+    return $self->{versions}->[ $self->{last_saved_version} ];
+}
+
+sub on_save {
+    my $self = shift;
+    $self->{last_saved_version} = $self->{versions}->$#*;
+}
+
 
 # Record updating. Call from State::Flow::_Transaction only allowed.
 # Params:
@@ -32,7 +42,7 @@ sub initial_version { shift->{versions}->[0] }
 # Result:
 #   0   - state before changes
 #   1   - state after changes
-sub _update {
+sub update {
     my($self, $changes) = @_;
 
     Internals::SvREADONLY($self->{versions}->@*, 0);

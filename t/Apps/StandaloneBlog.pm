@@ -15,7 +15,7 @@ use warnings FATAL => 'all';
         },
         -selections  => {
             by_id        => { where => [ 'id' ] },
-            all_by_ctime => { order => [ 'ctime' ] }
+            all_by_ctime => { order => [ 'id' ] }
         },
     },
     comments => {
@@ -34,7 +34,7 @@ use warnings FATAL => 'all';
         },
         -selections  => {
             by_id      => { where => [ 'id' ] },
-            by_post_id => { where => [ 'post_id' ], order => [ 'ctime' ] },
+            by_post_id => { where => [ 'post_id' ], order => [ 'id' ] },
         },
     },
     votes    => {

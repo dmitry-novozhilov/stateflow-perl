@@ -2,31 +2,32 @@ package State::Flow::TestHelpers;
 use strict;
 use warnings FATAL => 'all';
 
-use JSON;
 use Exporter 'import';
-our @EXPORT = qw(describe_shared_example_for_each_dbms); # load_json
+our @EXPORT = qw(describe_shared_example_for_each_dbms);
 
 use Test::Spec;
-
-# sub load_json {
-#     my($filepath) = @_;
-#     open(my $fh, '<', $filepath) or die "Can't load json $filepath: $!";
-#     return decode_json(join('', <$fh>));
-# }
 
 sub describe_shared_example_for_each_dbms {
     my($shared_example_name) = @_;
 
     foreach my $dbms (
         {
-            name                => 'SQLite',
-            module                => 'DBD::SQLite',
-            DBI_connect_params    => ["dbi:SQLite:dbname=:memory:", undef, undef, {RaiseError => 1}],
+            name               => 'SQLite',
+            module             => 'DBD::SQLite',
+            DBI_connect_params => [
+                'dbi:SQLite:dbname=:memory:',
+                undef,
+                undef,
+                {
+                    RaiseError => 1,
+                    sqlite_see_if_its_a_number => 1,
+                },
+            ],
         },
         {
             name    => 'MySQL',
             module    => 'DBD::mysql',
-            DBI_connect_params    => ["DBI:mysql:database=test;host=localhost", 'test', 'test', {RaiseError => 1}],
+            DBI_connect_params    => ['DBI:mysql:database=test;host=localhost', 'test', 'test', {RaiseError => 1}],
         },
     ) {
         my $describer = eval("use $dbms->{module}; 1") ? \&describe : \&xdescribe;

@@ -76,7 +76,7 @@ describe _DB => sub {
 
         it 'insert rows SQLite' => sub {
             State::Flow::_DB::SQLite::insert_rows($db, ttt => ['a','b'], [[1,2],[3,4]]);
-            cmp_deeply \@do_calls, [[$dbh, q|INSERT INTO `ttt` SELECT '1' AS `a`, '2' AS `b` UNION ALL SELECT '3' AS `a`, '4' AS `b`|]];
+            cmp_deeply \@do_calls, [[$dbh, q|INSERT INTO `ttt` (`a`, `b`) VALUES ('1', '2'), ('3', '4')|]];
         };
 
         it 'update rows' => sub {

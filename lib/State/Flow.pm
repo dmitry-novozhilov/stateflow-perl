@@ -44,6 +44,7 @@ sub _run {
     while(1) {
         $iter_num++;
         my $effect;
+        my @new_tasks;
         foreach my $prio (0 .. $#prio2cluster2tasks) {
             print STDERR "DEBUG: iter=$iter_num prio=$prio" if $ENV{STATEFLOW_DEBUG};
             if(! $prio2cluster2tasks[ $prio ]) {
@@ -72,9 +73,21 @@ sub _run {
                 print STDERR "DEBUG:   ".($effect ? 'HAS' : 'NO')." effect, new tasks: "
                     .join(', ', map {$_->to_string} @$new_tasks)."\n";
             }
+            push @new_tasks, @$new_tasks;
 
+
+            last if $effect;
+        }
+
+        if(not $effect) {
+            my $new_tasks = $trx->save_records();
+            push @new_tasks, @$new_tasks;
+            $effect += @$new_tasks;
+        }
+
+        if(@new_tasks) {
             my %cluster2new_tasks;
-            push $cluster2new_tasks{ $_->cluster_name }->@*, $_ foreach @$new_tasks;
+            push $cluster2new_tasks{ $_->cluster_name }->@*, $_ foreach @new_tasks;
             foreach my $new_cluster_name (keys %cluster2new_tasks) {
                 print STDERR "DEBUG:   cluster $new_cluster_name priority= " if $ENV{STATEFLOW_DEBUG};
                 my $old_cluster;
@@ -96,12 +109,16 @@ sub _run {
 
             }
 
-            last if $effect;
         }
-        last if ! $effect;
+
+        last if not $effect;
     }
 
-    return $task->record ? $task->record->last_version : undef;
+    $trx->commit();
+
+    #warn Dumper($task); use Data::Dumper;
+
+    return $task->record ? $task->record->current_version : undef;
 }
 
 =pod

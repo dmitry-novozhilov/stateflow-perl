@@ -10,10 +10,12 @@ sub new {
     my $self = bless {%args} => $class;
 
     my $index_name = $self->{trx}->values_to_index_name($self->{match_conds});
-    $self->{cluster_name} = join(':', read => $self->{table_name}, $index_name);
+    $self->{cluster_name} = join(':', read => $self->{table}, $index_name);
 
     return $self;
 }
+
+sub to_string {sprintf "Task:Read{table=%s,record=%s}", map {$_[0]->{$_} // '<undef>'} qw/table record/}
 
 sub cluster_priority {2 * (ref($_[0]) eq 'ARRAY' ? $_[0]->@* : 1)}
 
@@ -39,7 +41,7 @@ sub run {
         }
     }
 
-    return $effect, @tasks2fetch if $effect;
+    return \@tasks2fetch, $effect if $effect;
 
     ($exists, $records) = $trx->fetch($tasks->[0]->{table}, [map {$_->{match_conds}} @tasks2fetch]);
     for my $q (0 .. $#$tasks) {
@@ -47,7 +49,7 @@ sub run {
         $effect++;
     }
 
-    return $effect;
+    return [], $effect;
 }
 
 

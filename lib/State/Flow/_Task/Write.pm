@@ -10,10 +10,13 @@ sub new {
 
     return bless {
         %args,
-        # There is only one cluster, because write tasks do nothing in DB until transaction commit, and on commit records clusterises by another logic
+        # There is only one cluster, because write tasks do nothing in DB until transaction commit,
+        # and on commit records clusterises by another logic
         cluster_name    => 'write',
     } => $class;
 }
+
+sub to_string {sprintf "Task:Write{table=%s,record=%s}", map {$_[0]->{$_} // '<undef>'} qw/table record/}
 
 sub cluster_priority {1}
 
@@ -33,12 +36,13 @@ sub run {
                     push @tasks_ready_to_update, $task;
                 }
             } else {
-                push @new_tasks, $task->{read_task} = State::Flow::_Task::Read->new(table => $task->{table}, match_conds => $task->{match_conds});
+                push @new_tasks, $task->{read_task} = State::Flow::_Task::Read->new(
+                    table       => $task->{table},
+                    match_conds => $task->{match_conds},
+                );
                 $effect++;
             }
         } else {
-            use Data::Dumper;
-            say STDERR "task=".Dumper($task);
             $task->{record} = $task->{trx}->create_record($task->{table});
             push @tasks_ready_to_update, $task;
         }
@@ -49,10 +53,15 @@ sub run {
         $effect++;
 
         # TODO: #v0.0.2 все изменённые тут записи наверное хотят сгенерить задания по обновлению связанных материализаций
-
+        # push @new_tasks, __PACKAGE__->proc_record_change($before, $after)->@*;
     }
 
     return \@new_tasks, $effect;
+}
+
+sub proc_record_change {
+    my($class, $before, $after) = @_;
+    return []; # TODO: \@new_tasks;
 }
 
 1;
